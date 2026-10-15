@@ -41,9 +41,18 @@ RC OrderByPhysicalOperator::open(Trx *trx)
 RC OrderByPhysicalOperator::materialize()
 {
   rows_.clear();
+  if (top_k_ == 0) {
+    // limit 0：不需要任何行，也不必消费子算子
+    return RC::SUCCESS;
+  }
 
-  PhysicalOperator *child = children_[0].get();
-  RC                rc    = RC::SUCCESS;
+  PhysicalOperator *child      = children_[0].get();
+  RC                rc         = RC::SUCCESS;
+  const bool        keep_top_k = top_k_ > 0;
+  const size_t      top_k      = static_cast<size_t>(top_k_);
+  // 堆的比较函数与最终排序方向一致，堆顶是当前最差的一行
+  auto heap_less = [this](const SortRow &left, const SortRow &right) { return row_less(left, right); };
+
   while (RC::SUCCESS == (rc = child->next())) {
     Tuple *tuple = child->current_tuple();
     if (nullptr == tuple) {
@@ -61,27 +70,8 @@ RC OrderByPhysicalOperator::materialize()
       }
     }
 
-    // 有 limit 时只需要前 top_k 行，先用排序键淘汰，再为留下的行做深拷贝
-    if (top_k_ > 0) {
-      const size_t top_k = static_cast<size_t>(top_k_);
-      if (rows_.size() >= top_k && !row_less(row, rows_.front())) {
-        continue;
-      }
-
-      rc = ValueListTuple::make(*tuple, row.tuple);
-      if (OB_FAIL(rc)) {
-        LOG_WARN("failed to materialize tuple. rc=%s", strrc(rc));
-        return rc;
-      }
-
-      if (rows_.size() < top_k) {
-        rows_.emplace_back(std::move(row));
-        push_heap(rows_.begin(), rows_.end(), [this](const SortRow &l, const SortRow &r) { return row_less(l, r); });
-      } else {
-        pop_heap(rows_.begin(), rows_.end(), [this](const SortRow &l, const SortRow &r) { return row_less(l, r); });
-        rows_.back() = std::move(row);
-        push_heap(rows_.begin(), rows_.end(), [this](const SortRow &l, const SortRow &r) { return row_less(l, r); });
-      }
+    // 有 limit 时只保留最优的 top_k 行：先用排序键淘汰，再为留下的行做深拷贝
+    if (keep_top_k && rows_.size() >= top_k && !row_less(row, rows_.front())) {
       continue;
     }
 
@@ -90,7 +80,21 @@ RC OrderByPhysicalOperator::materialize()
       LOG_WARN("failed to materialize tuple. rc=%s", strrc(rc));
       return rc;
     }
-    rows_.emplace_back(std::move(row));
+
+    if (!keep_top_k) {
+      rows_.emplace_back(std::move(row));
+      continue;
+    }
+
+    if (rows_.size() < top_k) {
+      rows_.emplace_back(std::move(row));
+      push_heap(rows_.begin(), rows_.end(), heap_less);
+      continue;
+    }
+
+    pop_heap(rows_.begin(), rows_.end(), heap_less);
+    rows_.back() = std::move(row);
+    push_heap(rows_.begin(), rows_.end(), heap_less);
   }
 
   if (rc != RC::RECORD_EOF) {

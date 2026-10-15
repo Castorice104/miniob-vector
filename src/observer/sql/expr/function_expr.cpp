@@ -171,7 +171,13 @@ int FunctionExpr::value_length() const
 {
   const int child_len = children_.empty() ? 0 : children_[0]->value_length();
   switch (function_type_) {
-    case Type::STRING_TO_VECTOR: return child_len > 0 ? child_len : 0;
+    case Type::STRING_TO_VECTOR:
+      // 常量字符串参数在绑定期已解析为向量，长度就是它的字节数；
+      // 字符串字段只能在运行期解析，按每个元素至少 2 个字符估算
+      if (children_.empty() || children_[0]->value_type() == AttrType::VECTORS) {
+        return child_len > 0 ? child_len : 0;
+      }
+      return child_len > 0 ? child_len / 2 * static_cast<int>(sizeof(float)) : 0;
     case Type::VECTOR_TO_STRING:
       // 元素按最多 16 个字符估算，再加上方括号
       return child_len > 0 ? child_len / static_cast<int>(sizeof(float)) * 16 + 2 : 0;
@@ -268,18 +274,24 @@ RC FunctionExpr::get_value(const Tuple &tuple, Value &value) const
           result += left_data[i] * right_data[i];
         }
       } break;
-      default: {
+      case Metric::COSINE: {
         float dot = 0.0f, left_norm = 0.0f, right_norm = 0.0f;
         for (int i = 0; i < left_dim; i++) {
           dot += left_data[i] * right_data[i];
           left_norm += left_data[i] * left_data[i];
           right_norm += right_data[i] * right_data[i];
         }
+        // 零向量没有方向，分母为零时约定为最大距离，避免个别数据让整个查询报错
         if (left_norm <= 0.0f || right_norm <= 0.0f) {
-          LOG_WARN("cannot compute cosine distance of a zero vector");
-          return RC::INVALID_ARGUMENT;
+          LOG_WARN("cosine distance of a zero vector is undefined, use 1.0");
+          result = 1.0f;
+          break;
         }
         result = 1.0f - dot / (sqrtf(left_norm) * sqrtf(right_norm));
+      } break;
+      default: {
+        LOG_WARN("unsupported distance metric: %d", static_cast<int>(metric_));
+        return RC::UNIMPLEMENTED;
       } break;
     }
 

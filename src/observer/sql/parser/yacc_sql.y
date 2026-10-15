@@ -174,7 +174,7 @@ Expression *create_function_expression(const char *function_name,
 // %destructor { delete $$; } <rel_attr_list>
 %destructor { delete $$; } <relation_list>
 %destructor { delete $$; } <key_list>
-%destructor { for (auto &key : *$$) { delete key.expression; } delete $$; } <order_key_list>
+%destructor { if ($$ != nullptr) { for (auto &key : *$$) { delete key.expression; } delete $$; } } <order_key_list>
 
 %token <number> NUMBER
 %token <floats> FLOAT
