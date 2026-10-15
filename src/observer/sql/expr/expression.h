@@ -47,6 +47,7 @@ enum class ExprType
   CONJUNCTION,  ///< 多个表达式使用同一种关系(AND或OR)来联结
   ARITHMETIC,   ///< 算术运算
   AGGREGATION,  ///< 聚合运算
+  FUNCTION,     ///< 标量函数（当前用于向量相关函数）
 };
 
 /**
@@ -437,6 +438,56 @@ private:
   Type                   arithmetic_type_;
   unique_ptr<Expression> left_;
   unique_ptr<Expression> right_;
+};
+
+/**
+ * @brief 标量函数表达式（当前为向量转换函数）
+ */
+class FunctionExpr : public Expression
+{
+public:
+  enum class Type
+  {
+    STRING_TO_VECTOR,  ///< '[1,2,3]' -> vector
+    VECTOR_TO_STRING,  ///< vector -> '[1,2,3]'
+  };
+
+public:
+  FunctionExpr(Type type, unique_ptr<Expression> child) : function_type_(type), child_(std::move(child)) {}
+
+  unique_ptr<Expression> copy() const override { return make_unique<FunctionExpr>(function_type_, child_->copy()); }
+
+  ExprType type() const override { return ExprType::FUNCTION; }
+  AttrType value_type() const override
+  {
+    return function_type_ == Type::STRING_TO_VECTOR ? AttrType::VECTORS : AttrType::CHARS;
+  }
+
+  /// 结果的字节长度（供上层预分配/裁剪使用）
+  int value_length() const override
+  {
+    const int child_len = child_ == nullptr ? 0 : child_->value_length();
+    if (child_len <= 0) {
+      return 0;
+    }
+    if (function_type_ == Type::VECTOR_TO_STRING) {
+      // 向量转字符串：按每个元素最多 16 字符估算
+      return child_len / 4 * 16 + 2;
+    }
+    // 字符串转向量：按每 2 个字符一个元素估算，元素按 4 字节存储
+    return child_len * 2;
+  }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+
+  Type                     function_type() const { return function_type_; }
+  unique_ptr<Expression>  &child() { return child_; }
+
+  static RC type_from_string(const char *name, Type &type);
+
+private:
+  Type                   function_type_;
+  unique_ptr<Expression> child_;
 };
 
 class UnboundAggregateExpr : public Expression

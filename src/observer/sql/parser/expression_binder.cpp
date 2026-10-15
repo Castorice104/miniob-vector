@@ -411,8 +411,22 @@ RC ExpressionBinder::bind_aggregate_expression(
   AggregateExpr::Type aggregate_type;
   RC rc = AggregateExpr::type_from_string(aggregate_name, aggregate_type);
   if (OB_FAIL(rc)) {
-    LOG_WARN("invalid aggregate name: %s", aggregate_name);
-    return rc;
+    // 不是聚合函数时，尝试按标量函数（向量转换函数）处理
+    FunctionExpr::Type function_type;
+    if (RC::SUCCESS != FunctionExpr::type_from_string(aggregate_name, function_type)) {
+      LOG_WARN("invalid aggregate name: %s", aggregate_name);
+      return rc;
+    }
+
+    unique_ptr<Expression>        &child_expr = unbound_aggregate_expr->child();
+    vector<unique_ptr<Expression>> child_bound_expressions;
+    RC child_rc = bind_expression(child_expr, child_bound_expressions);
+    if (OB_FAIL(child_rc) || child_bound_expressions.size() != 1) {
+      LOG_WARN("failed to bind function argument. name=%s, rc=%d", aggregate_name, static_cast<int>(child_rc));
+      return OB_FAIL(child_rc) ? child_rc : RC::INVALID_ARGUMENT;
+    }
+    bound_expressions.emplace_back(new FunctionExpr(function_type, std::move(child_bound_expressions[0])));
+    return RC::SUCCESS;
   }
 
   unique_ptr<Expression>        &child_expr = unbound_aggregate_expr->child();

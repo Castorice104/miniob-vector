@@ -28,6 +28,16 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       rc = callback(cast_expr.child());
     } break;
 
+    case ExprType::FUNCTION: {
+      auto &function_expr = static_cast<FunctionExpr &>(expr);
+      rc                  = callback(function_expr.child());
+    } break;
+
+    case ExprType::UNBOUND_AGGREGATION: {
+      auto &unbound_aggregate_expr = static_cast<UnboundAggregateExpr &>(expr);
+      rc                           = callback(unbound_aggregate_expr.child());
+    } break;
+
     case ExprType::COMPARISON: {
 
       auto &comparison_expr = static_cast<ComparisonExpr &>(expr);
