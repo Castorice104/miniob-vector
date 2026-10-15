@@ -85,6 +85,9 @@ Expression *create_binary_function_expression(const char *function_name,
         CALC
         SELECT
         DESC
+        ORDER
+        ASC
+        LIMIT
         SHOW
         SYNC
         INSERT
