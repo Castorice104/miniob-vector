@@ -38,6 +38,14 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       rc                           = callback(unbound_aggregate_expr.child());
     } break;
 
+    case ExprType::UNBOUND_FUNCTION: {
+      auto &unbound_function_expr = static_cast<UnboundFunctionExpr &>(expr);
+      rc                          = callback(unbound_function_expr.left());
+      if (OB_SUCC(rc)) {
+        rc = callback(unbound_function_expr.right());
+      }
+    } break;
+
     case ExprType::COMPARISON: {
 
       auto &comparison_expr = static_cast<ComparisonExpr &>(expr);

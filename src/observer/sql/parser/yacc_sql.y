@@ -50,6 +50,17 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   return expr;
 }
 
+Expression *create_binary_function_expression(const char *function_name,
+                                           Expression *left,
+                                           Expression *right,
+                                           const char *sql_string,
+                                           YYLTYPE *llocp)
+{
+  Expression *expr = new UnboundFunctionExpr(function_name, left, right);
+  expr->set_name(token_name(sql_string, llocp));
+  return expr;
+}
+
 %}
 
 %define api.pure full
@@ -574,6 +585,9 @@ expression:
 aggregate_expression:
     ID LBRACE expression RBRACE {
       $$ = create_aggregate_expression($1, $3, sql_string, &@$);
+    }
+    | ID LBRACE expression COMMA expression RBRACE {
+      $$ = create_binary_function_expression($1, $3, $5, sql_string, &@$);
     }
     ;
 

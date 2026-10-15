@@ -1,6 +1,7 @@
 #include "sql/expr/expression.h"
 
 #include <cctype>
+#include <cmath>
 
 #include "common/lang/string.h"
 #include "common/log/log.h"
@@ -33,7 +34,34 @@ RC FunctionExpr::type_from_string(const char *name, Type &type)
     type = Type::VECTOR_TO_STRING;
     return RC::SUCCESS;
   }
+  if (function_name_is(name, "l2_distance") || function_name_is(name, "l2")) {
+    type = Type::L2_DISTANCE;
+    return RC::SUCCESS;
+  }
+  if (function_name_is(name, "cosine_distance") || function_name_is(name, "cosine")) {
+    type = Type::COSINE_DISTANCE;
+    return RC::SUCCESS;
+  }
+  if (function_name_is(name, "inner_product")) {
+    type = Type::INNER_PRODUCT;
+    return RC::SUCCESS;
+  }
   return RC::UNIMPLEMENTED;
+}
+
+static RC fetch_vector(const Value &src, Value &holder, const float **data, int *dim)
+{
+  if (src.attr_type() != AttrType::VECTORS) {
+    RC rc = Value::cast_to(src, AttrType::VECTORS, holder);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  } else {
+    holder = src;
+  }
+  *data = holder.vector_data();
+  *dim  = holder.vector_dim();
+  return (*dim > 0) ? RC::SUCCESS : RC::INVALID_ARGUMENT;
 }
 
 RC FunctionExpr::get_value(const Tuple &tuple, Value &value) const
@@ -43,6 +71,57 @@ RC FunctionExpr::get_value(const Tuple &tuple, Value &value) const
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to get child value. rc=%d", static_cast<int>(rc));
     return rc;
+  }
+
+  if (is_distance()) {
+    Value right_value;
+    rc = child2_->get_value(tuple, right_value);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    Value        left_holder;
+    Value        right_holder;
+    const float *left_data  = nullptr;
+    const float *right_data = nullptr;
+    int          left_dim   = 0;
+    int          right_dim  = 0;
+    rc = fetch_vector(child_value, left_holder, &left_data, &left_dim);
+    if (OB_SUCC(rc)) {
+      rc = fetch_vector(right_value, right_holder, &right_data, &right_dim);
+    }
+    if (OB_FAIL(rc) || left_dim != right_dim) {
+      return OB_FAIL(rc) ? rc : RC::INVALID_ARGUMENT;
+    }
+
+    float result = 0.0f;
+    switch (function_type_) {
+      case Type::INNER_PRODUCT: {
+        for (int i = 0; i < left_dim; i++) {
+          result += left_data[i] * right_data[i];
+        }
+      } break;
+      case Type::L2_DISTANCE: {
+        for (int i = 0; i < left_dim; i++) {
+          const float diff = left_data[i] - right_data[i];
+          result += diff * diff;
+        }
+        result = sqrtf(result);
+      } break;
+      default: {
+        float dot = 0.0f, ln = 0.0f, rn = 0.0f;
+        for (int i = 0; i < left_dim; i++) {
+          dot += left_data[i] * right_data[i];
+          ln += left_data[i] * left_data[i];
+          rn += right_data[i] * right_data[i];
+        }
+        if (ln <= 0.0f || rn <= 0.0f) {
+          return RC::INVALID_ARGUMENT;
+        }
+        result = 1.0f - dot / (sqrtf(ln) * sqrtf(rn));
+      } break;
+    }
+    value.set_float(result);
+    return RC::SUCCESS;
   }
 
   DataType *vector_type = DataType::type_instance(AttrType::VECTORS);
@@ -78,6 +157,7 @@ RC FunctionExpr::get_value(const Tuple &tuple, Value &value) const
       value.set_string(text.data(), static_cast<int>(text.size()));
       return RC::SUCCESS;
     }
+    default: break;
   }
   return RC::UNIMPLEMENTED;
 }

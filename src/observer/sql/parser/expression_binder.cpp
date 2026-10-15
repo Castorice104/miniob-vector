@@ -62,6 +62,26 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
       return bind_aggregate_expression(expr, bound_expressions);
     } break;
 
+    case ExprType::UNBOUND_FUNCTION: {
+      auto              *unbound = static_cast<UnboundFunctionExpr *>(expr.get());
+      FunctionExpr::Type fn_type;
+      if (RC::SUCCESS != FunctionExpr::type_from_string(unbound->function_name(), fn_type)) {
+        LOG_WARN("unknown function: %s", unbound->function_name());
+        return RC::UNIMPLEMENTED;
+      }
+      vector<unique_ptr<Expression>> bound_left;
+      vector<unique_ptr<Expression>> bound_right;
+      RC rc = bind_expression(unbound->left(), bound_left);
+      if (OB_SUCC(rc)) {
+        rc = bind_expression(unbound->right(), bound_right);
+      }
+      if (OB_FAIL(rc) || bound_left.size() != 1 || bound_right.size() != 1) {
+        return OB_FAIL(rc) ? rc : RC::INVALID_ARGUMENT;
+      }
+      bound_expressions.emplace_back(new FunctionExpr(fn_type, std::move(bound_left[0]), std::move(bound_right[0])));
+      return RC::SUCCESS;
+    } break;
+
     case ExprType::FIELD: {
       return bind_field_expression(expr, bound_expressions);
     } break;

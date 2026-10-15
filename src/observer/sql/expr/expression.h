@@ -48,6 +48,7 @@ enum class ExprType
   ARITHMETIC,   ///< 算术运算
   AGGREGATION,  ///< 聚合运算
   FUNCTION,     ///< 标量函数（当前用于向量相关函数）
+  UNBOUND_FUNCTION,  ///< 未绑定的多参数函数调用
 };
 
 /**
@@ -450,22 +451,37 @@ public:
   {
     STRING_TO_VECTOR,  ///< '[1,2,3]' -> vector
     VECTOR_TO_STRING,  ///< vector -> '[1,2,3]'
+    L2_DISTANCE,
+    COSINE_DISTANCE,
+    INNER_PRODUCT,
   };
 
 public:
   FunctionExpr(Type type, unique_ptr<Expression> child) : function_type_(type), child_(std::move(child)) {}
+  FunctionExpr(Type type, unique_ptr<Expression> left, unique_ptr<Expression> right)
+      : function_type_(type), child_(std::move(left)), child2_(std::move(right))
+  {}
 
   unique_ptr<Expression> copy() const override { return make_unique<FunctionExpr>(function_type_, child_->copy()); }
 
   ExprType type() const override { return ExprType::FUNCTION; }
   AttrType value_type() const override
   {
-    return function_type_ == Type::STRING_TO_VECTOR ? AttrType::VECTORS : AttrType::CHARS;
+    if (function_type_ == Type::STRING_TO_VECTOR) {
+      return AttrType::VECTORS;
+    }
+    if (function_type_ == Type::VECTOR_TO_STRING) {
+      return AttrType::CHARS;
+    }
+    return AttrType::FLOATS;
   }
 
   /// 结果的字节长度（供上层预分配/裁剪使用）
   int value_length() const override
   {
+    if (is_distance()) {
+      return sizeof(float);
+    }
     const int child_len = child_ == nullptr ? 0 : child_->value_length();
     if (child_len <= 0) {
       return 0;
@@ -482,12 +498,46 @@ public:
 
   Type                     function_type() const { return function_type_; }
   unique_ptr<Expression>  &child() { return child_; }
+  unique_ptr<Expression>  &child2() { return child2_; }
+  bool                     is_distance() const
+  {
+    return function_type_ == Type::L2_DISTANCE || function_type_ == Type::COSINE_DISTANCE ||
+           function_type_ == Type::INNER_PRODUCT;
+  }
 
   static RC type_from_string(const char *name, Type &type);
 
 private:
   Type                   function_type_;
   unique_ptr<Expression> child_;
+  unique_ptr<Expression> child2_;
+};
+
+class UnboundFunctionExpr : public Expression
+{
+public:
+  UnboundFunctionExpr(const char *name, Expression *left, Expression *right)
+      : function_name_(name), left_(left), right_(right)
+  {}
+
+  ExprType type() const override { return ExprType::UNBOUND_FUNCTION; }
+  AttrType value_type() const override { return AttrType::UNDEFINED; }
+
+  unique_ptr<Expression> copy() const override
+  {
+    return make_unique<UnboundFunctionExpr>(function_name_.c_str(), left_->copy().release(), right_->copy().release());
+  }
+
+  RC get_value(const Tuple &, Value &) const override { return RC::INTERNAL; }
+
+  const char             *function_name() const { return function_name_.c_str(); }
+  unique_ptr<Expression> &left() { return left_; }
+  unique_ptr<Expression> &right() { return right_; }
+
+private:
+  string                 function_name_;
+  unique_ptr<Expression> left_;
+  unique_ptr<Expression> right_;
 };
 
 class UnboundAggregateExpr : public Expression
