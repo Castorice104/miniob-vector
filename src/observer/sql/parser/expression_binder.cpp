@@ -63,23 +63,7 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     } break;
 
     case ExprType::UNBOUND_FUNCTION: {
-      auto              *unbound = static_cast<UnboundFunctionExpr *>(expr.get());
-      FunctionExpr::Type fn_type;
-      if (RC::SUCCESS != FunctionExpr::type_from_string(unbound->function_name(), fn_type)) {
-        LOG_WARN("unknown function: %s", unbound->function_name());
-        return RC::UNIMPLEMENTED;
-      }
-      vector<unique_ptr<Expression>> bound_left;
-      vector<unique_ptr<Expression>> bound_right;
-      RC rc = bind_expression(unbound->left(), bound_left);
-      if (OB_SUCC(rc)) {
-        rc = bind_expression(unbound->right(), bound_right);
-      }
-      if (OB_FAIL(rc) || bound_left.size() != 1 || bound_right.size() != 1) {
-        return OB_FAIL(rc) ? rc : RC::INVALID_ARGUMENT;
-      }
-      bound_expressions.emplace_back(new FunctionExpr(fn_type, std::move(bound_left[0]), std::move(bound_right[0])));
-      return RC::SUCCESS;
+      return bind_function_expression(expr, bound_expressions);
     } break;
 
     case ExprType::FIELD: {
@@ -432,20 +416,34 @@ RC ExpressionBinder::bind_aggregate_expression(
   RC rc = AggregateExpr::type_from_string(aggregate_name, aggregate_type);
   if (OB_FAIL(rc)) {
     // 不是聚合函数时，尝试按标量函数（向量转换函数）处理
-    FunctionExpr::Type function_type;
-    if (RC::SUCCESS != FunctionExpr::type_from_string(aggregate_name, function_type)) {
+    FunctionExpr::Type   function_type;
+    FunctionExpr::Metric metric;
+    if (RC::SUCCESS != FunctionExpr::type_from_string(aggregate_name, function_type, metric)) {
       LOG_WARN("invalid aggregate name: %s", aggregate_name);
       return rc;
     }
+    if (FunctionExpr::arity(function_type) != 1) {
+      LOG_WARN("function %s needs two arguments", aggregate_name);
+      return RC::INVALID_ARGUMENT;
+    }
 
     unique_ptr<Expression>        &child_expr = unbound_aggregate_expr->child();
-    vector<unique_ptr<Expression>> child_bound_expressions;
-    RC child_rc = bind_expression(child_expr, child_bound_expressions);
-    if (OB_FAIL(child_rc) || child_bound_expressions.size() != 1) {
+    vector<unique_ptr<Expression>> children;
+    RC                             child_rc = bind_expression(child_expr, children);
+    if (OB_FAIL(child_rc) || children.size() != 1) {
       LOG_WARN("failed to bind function argument. name=%s, rc=%d", aggregate_name, static_cast<int>(child_rc));
       return OB_FAIL(child_rc) ? child_rc : RC::INVALID_ARGUMENT;
     }
-    bound_expressions.emplace_back(new FunctionExpr(function_type, std::move(child_bound_expressions[0])));
+
+    child_rc = FunctionExpr::normalize(function_type, metric, children);
+    if (OB_FAIL(child_rc)) {
+      LOG_WARN("invalid argument of function %s. rc=%s", aggregate_name, strrc(child_rc));
+      return child_rc;
+    }
+
+    auto function_expr = make_unique<FunctionExpr>(function_type, metric, std::move(children));
+    function_expr->set_name(unbound_aggregate_expr->name());
+    bound_expressions.emplace_back(std::move(function_expr));
     return RC::SUCCESS;
   }
 
@@ -479,5 +477,63 @@ RC ExpressionBinder::bind_aggregate_expression(
   }
 
   bound_expressions.emplace_back(std::move(aggregate_expr));
+  return RC::SUCCESS;
+}
+
+RC ExpressionBinder::bind_function_expression(
+    unique_ptr<Expression> &expr, vector<unique_ptr<Expression>> &bound_expressions)
+{
+  auto       *unbound = static_cast<UnboundFunctionExpr *>(expr.get());
+  const char *name    = unbound->function_name();
+
+  FunctionExpr::Type   function_type;
+  FunctionExpr::Metric metric;
+  RC                   rc = FunctionExpr::type_from_string(name, function_type, metric);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("unknown function: %s", name);
+    return rc;
+  }
+
+  vector<unique_ptr<Expression>> children;
+  for (size_t i = 0; i < unbound->arg_count(); i++) {
+    vector<unique_ptr<Expression>> bound_args;
+    rc = bind_expression(unbound->arg(i), bound_args);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    if (bound_args.size() != 1) {
+      LOG_WARN("invalid argument of function: %s", name);
+      return RC::INVALID_ARGUMENT;
+    }
+    children.emplace_back(std::move(bound_args[0]));
+  }
+
+  // distance(a, b, 'COSINE')：度量以常量字符串的形式给出，在绑定期解析
+  if (function_type == FunctionExpr::Type::DISTANCE && metric == FunctionExpr::Metric::UNSPECIFIED) {
+    if (children.size() == 3 && children.back()->type() == ExprType::VALUE) {
+      const Value &metric_value = static_cast<ValueExpr *>(children.back().get())->get_value();
+      if (metric_value.attr_type() != AttrType::CHARS ||
+          OB_FAIL(FunctionExpr::metric_from_string(metric_value.get_string().c_str(), metric))) {
+        LOG_WARN("invalid distance metric of function: %s", name);
+        return RC::INVALID_ARGUMENT;
+      }
+      children.pop_back();
+    } else if (children.size() == 2) {
+      metric = FunctionExpr::Metric::EUCLIDEAN;
+    } else {
+      LOG_WARN("invalid argument number of function: %s", name);
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
+  rc = FunctionExpr::normalize(function_type, metric, children);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("invalid argument of function %s. rc=%s", name, strrc(rc));
+    return rc;
+  }
+
+  auto function_expr = make_unique<FunctionExpr>(function_type, metric, std::move(children));
+  function_expr->set_name(unbound->name());
+  bound_expressions.emplace_back(std::move(function_expr));
   return RC::SUCCESS;
 }

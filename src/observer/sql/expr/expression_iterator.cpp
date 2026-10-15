@@ -30,7 +30,12 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
 
     case ExprType::FUNCTION: {
       auto &function_expr = static_cast<FunctionExpr &>(expr);
-      rc                  = callback(function_expr.child());
+      for (auto &child : function_expr.children()) {
+        rc = callback(child);
+        if (OB_FAIL(rc)) {
+          break;
+        }
+      }
     } break;
 
     case ExprType::UNBOUND_AGGREGATION: {
@@ -40,9 +45,11 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
 
     case ExprType::UNBOUND_FUNCTION: {
       auto &unbound_function_expr = static_cast<UnboundFunctionExpr &>(expr);
-      rc                          = callback(unbound_function_expr.left());
-      if (OB_SUCC(rc)) {
-        rc = callback(unbound_function_expr.right());
+      for (size_t i = 0; i < unbound_function_expr.arg_count(); i++) {
+        rc = callback(unbound_function_expr.arg(i));
+        if (OB_FAIL(rc)) {
+          break;
+        }
       }
     } break;
 

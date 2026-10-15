@@ -50,13 +50,21 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   return expr;
 }
 
-Expression *create_binary_function_expression(const char *function_name,
-                                           Expression *left,
-                                           Expression *right,
-                                           const char *sql_string,
-                                           YYLTYPE *llocp)
+Expression *create_function_expression(const char *function_name,
+                                       Expression *first,
+                                       Expression *second,
+                                       Expression *third,
+                                       const char *sql_string,
+                                       YYLTYPE *llocp)
 {
-  Expression *expr = new UnboundFunctionExpr(function_name, left, right);
+  vector<unique_ptr<Expression>> args;
+  args.emplace_back(first);
+  args.emplace_back(second);
+  if (third != nullptr) {
+    args.emplace_back(third);
+  }
+
+  Expression *expr = new UnboundFunctionExpr(function_name, std::move(args));
   expr->set_name(token_name(sql_string, llocp));
   return expr;
 }
@@ -148,6 +156,8 @@ Expression *create_binary_function_expression(const char *function_name,
   vector<RelAttrSqlNode> *                   rel_attr_list;
   vector<string> *                           relation_list;
   vector<string> *                           key_list;
+  OrderKeySqlNode                            order_key;
+  vector<OrderKeySqlNode> *                  order_key_list;
   char *                                     cstring;
   int                                        number;
   float                                      floats;
@@ -164,6 +174,7 @@ Expression *create_binary_function_expression(const char *function_name,
 // %destructor { delete $$; } <rel_attr_list>
 %destructor { delete $$; } <relation_list>
 %destructor { delete $$; } <key_list>
+%destructor { for (auto &key : *$$) { delete key.expression; } delete $$; } <order_key_list>
 
 %token <number> NUMBER
 %token <floats> FLOAT
@@ -192,6 +203,10 @@ Expression *create_binary_function_expression(const char *function_name,
 %type <expression>          aggregate_expression
 %type <expression_list>     expression_list
 %type <expression_list>     group_by
+%type <order_key>           order_key
+%type <order_key_list>      order_key_list
+%type <order_key_list>      order_by
+%type <number>              limit
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
 %type <sql_node>            calc_stmt
@@ -497,7 +512,7 @@ update_stmt:      /*  update 语句的语法解析树*/
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by
+    SELECT expression_list FROM rel_list where group_by order_by limit
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -519,6 +534,16 @@ select_stmt:        /*  select 语句的语法解析树*/
         $$->selection.group_by.swap(*$6);
         delete $6;
       }
+
+      if ($7 != nullptr) {
+        for (auto &key : *$7) {
+          $$->selection.order_by.emplace_back(key.expression);
+          $$->selection.order_by_asc.push_back(key.ascending != 0);
+        }
+        delete $7;
+      }
+
+      $$->selection.limit = $8;
     }
     ;
 calc_stmt:
@@ -590,7 +615,10 @@ aggregate_expression:
       $$ = create_aggregate_expression($1, $3, sql_string, &@$);
     }
     | ID LBRACE expression COMMA expression RBRACE {
-      $$ = create_binary_function_expression($1, $3, $5, sql_string, &@$);
+      $$ = create_function_expression($1, $3, $5, nullptr, sql_string, &@$);
+    }
+    | ID LBRACE expression COMMA expression COMMA expression RBRACE {
+      $$ = create_function_expression($1, $3, $5, $7, sql_string, &@$);
     }
     ;
 
@@ -725,6 +753,60 @@ group_by:
       $$ = $3;
     }
     ;
+
+order_by:
+    /* empty */
+    {
+      $$ = nullptr;
+    }
+    | ORDER BY order_key_list
+    {
+      $$ = $3;
+    }
+    ;
+
+order_key_list:
+    order_key
+    {
+      $$ = new vector<OrderKeySqlNode>;
+      $$->emplace_back($1);
+    }
+    | order_key_list COMMA order_key
+    {
+      $$ = $1;
+      $$->emplace_back($3);
+    }
+    ;
+
+order_key:
+    expression
+    {
+      $$.expression = $1;
+      $$.ascending  = 1;
+    }
+    | expression ASC
+    {
+      $$.expression = $1;
+      $$.ascending  = 1;
+    }
+    | expression DESC
+    {
+      $$.expression = $1;
+      $$.ascending  = 0;
+    }
+    ;
+
+limit:
+    /* empty */
+    {
+      $$ = -1;
+    }
+    | LIMIT NUMBER
+    {
+      $$ = $2;
+    }
+    ;
+
 load_data_stmt:
     LOAD DATA INFILE SSS INTO TABLE ID fields_terminated_by enclosed_by
     {

@@ -442,7 +442,7 @@ private:
 };
 
 /**
- * @brief 标量函数表达式（当前为向量转换函数）
+ * @brief 标量函数表达式：向量类型转换与向量距离
  */
 class FunctionExpr : public Expression
 {
@@ -451,93 +451,72 @@ public:
   {
     STRING_TO_VECTOR,  ///< '[1,2,3]' -> vector
     VECTOR_TO_STRING,  ///< vector -> '[1,2,3]'
-    L2_DISTANCE,
-    COSINE_DISTANCE,
-    INNER_PRODUCT,
+    DISTANCE,          ///< 两个向量的距离，度量由 Metric 决定
+  };
+
+  /// 距离度量：EUCLIDEAN=sqrt(Σ(a-b)²)，COSINE=1-a·b/(|a||b|)，DOT=a·b
+  enum class Metric
+  {
+    UNSPECIFIED,  ///< 尚未确定，由 DISTANCE 的第三个参数给出
+    EUCLIDEAN,
+    COSINE,
+    DOT,
   };
 
 public:
-  FunctionExpr(Type type, unique_ptr<Expression> child) : function_type_(type), child_(std::move(child)) {}
-  FunctionExpr(Type type, unique_ptr<Expression> left, unique_ptr<Expression> right)
-      : function_type_(type), child_(std::move(left)), child2_(std::move(right))
+  FunctionExpr(Type type, Metric metric, vector<unique_ptr<Expression>> &&children)
+      : function_type_(type), metric_(metric), children_(std::move(children))
   {}
 
-  unique_ptr<Expression> copy() const override { return make_unique<FunctionExpr>(function_type_, child_->copy()); }
+  unique_ptr<Expression> copy() const override;
 
   ExprType type() const override { return ExprType::FUNCTION; }
-  AttrType value_type() const override
-  {
-    if (function_type_ == Type::STRING_TO_VECTOR) {
-      return AttrType::VECTORS;
-    }
-    if (function_type_ == Type::VECTOR_TO_STRING) {
-      return AttrType::CHARS;
-    }
-    return AttrType::FLOATS;
-  }
-
-  /// 结果的字节长度（供上层预分配/裁剪使用）
-  int value_length() const override
-  {
-    if (is_distance()) {
-      return sizeof(float);
-    }
-    const int child_len = child_ == nullptr ? 0 : child_->value_length();
-    if (child_len <= 0) {
-      return 0;
-    }
-    if (function_type_ == Type::VECTOR_TO_STRING) {
-      // 向量转字符串：按每个元素最多 16 字符估算
-      return child_len / 4 * 16 + 2;
-    }
-    // 字符串转向量：按每 2 个字符一个元素估算，元素按 4 字节存储
-    return child_len * 2;
-  }
+  AttrType value_type() const override;
+  int      value_length() const override;
 
   RC get_value(const Tuple &tuple, Value &value) const override;
 
-  Type                     function_type() const { return function_type_; }
-  unique_ptr<Expression>  &child() { return child_; }
-  unique_ptr<Expression>  &child2() { return child2_; }
-  bool                     is_distance() const
-  {
-    return function_type_ == Type::L2_DISTANCE || function_type_ == Type::COSINE_DISTANCE ||
-           function_type_ == Type::INNER_PRODUCT;
-  }
+  Type   function_type() const { return function_type_; }
+  Metric metric() const { return metric_; }
 
-  static RC type_from_string(const char *name, Type &type);
+  vector<unique_ptr<Expression>> &children() { return children_; }
+
+  /// 参数个数
+  static int arity(Type type);
+  /// 函数名为距离函数时返回其默认度量，否则返回 UNSPECIFIED
+  static RC type_from_string(const char *name, Type &type, Metric &metric);
+  /// 解析 DISTANCE 第三个参数中的度量名
+  static RC metric_from_string(const char *name, Metric &metric);
+  /// 校验参数个数/类型/维度，并把常量字符串参数就地解析为向量
+  static RC normalize(Type type, Metric metric, vector<unique_ptr<Expression>> &children);
 
 private:
-  Type                   function_type_;
-  unique_ptr<Expression> child_;
-  unique_ptr<Expression> child2_;
+  Type                           function_type_;
+  Metric                         metric_;
+  vector<unique_ptr<Expression>> children_;
 };
 
 class UnboundFunctionExpr : public Expression
 {
 public:
-  UnboundFunctionExpr(const char *name, Expression *left, Expression *right)
-      : function_name_(name), left_(left), right_(right)
+  UnboundFunctionExpr(const char *name, vector<unique_ptr<Expression>> &&args)
+      : function_name_(name), args_(std::move(args))
   {}
 
   ExprType type() const override { return ExprType::UNBOUND_FUNCTION; }
   AttrType value_type() const override { return AttrType::UNDEFINED; }
 
-  unique_ptr<Expression> copy() const override
-  {
-    return make_unique<UnboundFunctionExpr>(function_name_.c_str(), left_->copy().release(), right_->copy().release());
-  }
+  unique_ptr<Expression> copy() const override;
 
   RC get_value(const Tuple &, Value &) const override { return RC::INTERNAL; }
 
   const char             *function_name() const { return function_name_.c_str(); }
-  unique_ptr<Expression> &left() { return left_; }
-  unique_ptr<Expression> &right() { return right_; }
+  size_t                  arg_count() const { return args_.size(); }
+  unique_ptr<Expression> &arg(size_t index) { return args_[index]; }
 
 private:
-  string                 function_name_;
-  unique_ptr<Expression> left_;
-  unique_ptr<Expression> right_;
+  string                         function_name_;
+  vector<unique_ptr<Expression>> args_;
 };
 
 class UnboundAggregateExpr : public Expression

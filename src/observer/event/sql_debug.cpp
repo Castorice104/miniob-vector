@@ -25,18 +25,20 @@ void SqlDebug::clear_debug_info() { debug_infos_.clear(); }
 
 const list<string> &SqlDebug::get_debug_infos() const { return debug_infos_; }
 
-void sql_debug(const char *fmt, ...)
+bool sql_debug_enabled()
 {
   Session *session = Session::current_session();
-  if (nullptr == session) {
+  // 只有客户端打开了调试输出才需要组装调试信息，否则每次调用都会白白格式化一遍整行数据
+  return session != nullptr && session->sql_debug_on() && session->current_request() != nullptr;
+}
+
+void sql_debug(const char *fmt, ...)
+{
+  if (!sql_debug_enabled()) {
     return;
   }
 
-  SessionEvent *request = session->current_request();
-  if (nullptr == request) {
-    return;
-  }
-
+  SessionEvent *request = Session::current_session()->current_request();
   SqlDebug &sql_debug = request->sql_debug();
 
   const int buffer_size = 4096;

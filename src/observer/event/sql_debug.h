@@ -46,3 +46,9 @@ private:
  * 在普通文本场景下，调试信息会直接输出到客户端，并增加 '#' 作为前缀。
  */
 void sql_debug(const char *fmt, ...);
+
+/**
+ * @brief 当前上下文是否会输出调试信息
+ * @details 调试信息的参数在调用处就会求值，热路径上应先判断再组装字符串
+ */
+bool sql_debug_enabled();

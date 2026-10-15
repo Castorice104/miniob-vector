@@ -27,6 +27,15 @@ class Expression;
  */
 
 /**
+ * @brief 描述 order by 中的一个排序键
+ */
+struct OrderKeySqlNode
+{
+  Expression *expression;  ///< 排序表达式
+  int         ascending;   ///< 非 0 表示升序
+};
+
+/**
  * @brief 描述一个属性
  * @ingroup SQLParser
  * @details 属性，或者说字段(column, field)
@@ -92,6 +101,9 @@ struct SelectSqlNode
   vector<string>                 relations;    ///< 查询的表
   vector<ConditionSqlNode>       conditions;   ///< 查询条件，使用AND串联起来多个条件
   vector<unique_ptr<Expression>> group_by;     ///< group by clause
+  vector<unique_ptr<Expression>> order_by;     ///< order by 表达式（支持按表达式排序，供 KNN 使用）
+  vector<bool>                   order_by_asc; ///< 每个排序键是否升序
+  int                            limit = -1;   ///< limit 行数，-1 表示未指定
 };
 
 /**

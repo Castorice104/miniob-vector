@@ -29,7 +29,11 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/insert_logical_operator.h"
 #include "sql/operator/insert_physical_operator.h"
 #include "sql/operator/join_logical_operator.h"
+#include "sql/operator/limit_logical_operator.h"
+#include "sql/operator/limit_physical_operator.h"
 #include "sql/operator/nested_loop_join_physical_operator.h"
+#include "sql/operator/order_by_logical_operator.h"
+#include "sql/operator/order_by_physical_operator.h"
 #include "sql/operator/predicate_logical_operator.h"
 #include "sql/operator/predicate_physical_operator.h"
 #include "sql/operator/project_logical_operator.h"
@@ -85,6 +89,14 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
 
     case LogicalOperatorType::GROUP_BY: {
       return create_plan(static_cast<GroupByLogicalOperator &>(logical_operator), oper, session);
+    } break;
+
+    case LogicalOperatorType::ORDER_BY: {
+      return create_plan(static_cast<OrderByLogicalOperator &>(logical_operator), oper, session);
+    } break;
+
+    case LogicalOperatorType::LIMIT: {
+      return create_plan(static_cast<LimitLogicalOperator &>(logical_operator), oper, session);
     } break;
 
     default: {
@@ -368,6 +380,43 @@ RC PhysicalPlanGenerator::create_plan(GroupByLogicalOperator &logical_oper, uniq
   group_by_oper->add_child(std::move(child_physical_oper));
 
   oper = std::move(group_by_oper);
+  return rc;
+}
+
+RC PhysicalPlanGenerator::create_plan(OrderByLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session)
+{
+  ASSERT(logical_oper.children().size() == 1, "order by operator should have 1 child");
+
+  unique_ptr<PhysicalOperator> child_physical_oper;
+  RC                           rc = create(*logical_oper.children().front(), child_physical_oper, session);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create child physical operator of order by operator. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  auto order_by_oper = make_unique<OrderByPhysicalOperator>(
+      std::move(logical_oper.sort_expressions()), std::move(logical_oper.ascending()), logical_oper.top_k());
+  order_by_oper->add_child(std::move(child_physical_oper));
+
+  oper = std::move(order_by_oper);
+  return rc;
+}
+
+RC PhysicalPlanGenerator::create_plan(LimitLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session)
+{
+  ASSERT(logical_oper.children().size() == 1, "limit operator should have 1 child");
+
+  unique_ptr<PhysicalOperator> child_physical_oper;
+  RC                           rc = create(*logical_oper.children().front(), child_physical_oper, session);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create child physical operator of limit operator. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  auto limit_oper = make_unique<LimitPhysicalOperator>(logical_oper.limit());
+  limit_oper->add_child(std::move(child_physical_oper));
+
+  oper = std::move(limit_oper);
   return rc;
 }
 
