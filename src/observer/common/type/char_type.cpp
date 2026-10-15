@@ -29,6 +29,12 @@ RC CharType::set_value_from_str(Value &val, const string &data) const
 RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
 {
   switch (type) {
+    case AttrType::VECTORS: {
+      if (val.value_.pointer_value_ == nullptr) {
+        return RC::INVALID_ARGUMENT;
+      }
+      return DataType::type_instance(AttrType::VECTORS)->set_value_from_str(result, string(val.value_.pointer_value_, val.length_));
+    }
     default: return RC::UNIMPLEMENTED;
   }
   return RC::SUCCESS;
@@ -38,6 +44,10 @@ int CharType::cast_cost(AttrType type)
 {
   if (type == AttrType::CHARS) {
     return 0;
+  }
+  // 字符串字面量可以按 "[1,2,3]" 的形式转换为向量
+  if (type == AttrType::VECTORS) {
+    return 1;
   }
   return INT32_MAX;
 }

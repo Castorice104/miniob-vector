@@ -113,12 +113,21 @@ public:
   string_t get_string_t() const;
   bool     get_boolean() const;
 
+  /// 向量类型：原始 float 缓冲区、维度
+  const float *vector_data() const;
+  float       *vector_data();
+  int          vector_dim() const;
+
 public:
   void set_int(int val);
   void set_float(float val);
   void set_string(const char *s, int len = 0);
   void set_empty_string(int len);
   void set_string_from_other(const Value &other);
+
+  /// 由 float 数组构造向量值（拷贝数据）
+  void set_vector(const float *data, int dim);
+  void set_vector_from_other(const Value &other);
 
 private:
   AttrType attr_type_ = AttrType::UNDEFINED;

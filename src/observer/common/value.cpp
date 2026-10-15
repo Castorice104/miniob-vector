@@ -41,6 +41,10 @@ Value::Value(const Value &other)
       set_string_from_other(other);
     } break;
 
+    case AttrType::VECTORS: {
+      set_vector_from_other(other);
+    } break;
+
     default: {
       this->value_ = other.value_;
     } break;
@@ -97,6 +101,7 @@ void Value::reset()
 {
   switch (attr_type_) {
     case AttrType::CHARS:
+    case AttrType::VECTORS:
       if (own_data_ && value_.pointer_value_ != nullptr) {
         delete[] value_.pointer_value_;
         value_.pointer_value_ = nullptr;
@@ -127,6 +132,12 @@ void Value::set_data(char *data, int length)
     case AttrType::BOOLEANS: {
       value_.bool_value_ = *(int *)data != 0;
       length_            = length;
+    } break;
+    case AttrType::VECTORS: {
+      own_data_             = true;
+      length_               = length;
+      value_.pointer_value_ = new char[length];
+      memcpy(value_.pointer_value_, data, length);
     } break;
     default: {
       LOG_WARN("unknown data type: %d", attr_type_);
@@ -206,6 +217,9 @@ void Value::set_value(const Value &value)
     case AttrType::BOOLEANS: {
       set_boolean(value.get_boolean());
     } break;
+    case AttrType::VECTORS: {
+      set_vector(value.vector_data(), value.vector_dim());
+    } break;
     default: {
       ASSERT(false, "got an invalid value type");
     } break;
@@ -225,13 +239,50 @@ void Value::set_string_from_other(const Value &other)
 char *Value::data() const
 {
   switch (attr_type_) {
-    case AttrType::CHARS: {
+    case AttrType::CHARS:
+    case AttrType::VECTORS: {
       return value_.pointer_value_;
     } break;
     default: {
       return (char *)&value_;
     } break;
   }
+}
+
+void Value::set_vector(const float *data, int dim)
+{
+  reset();
+  attr_type_ = AttrType::VECTORS;
+  if (data == nullptr || dim <= 0) {
+    value_.pointer_value_ = nullptr;
+    length_               = 0;
+    return;
+  }
+  own_data_ = true;
+  length_   = dim * static_cast<int>(sizeof(float));
+  value_.pointer_value_ = new char[length_];
+  memcpy(value_.pointer_value_, data, length_);
+}
+
+void Value::set_vector_from_other(const Value &other)
+{
+  ASSERT(attr_type_ == AttrType::VECTORS, "attr type is not VECTORS");
+  if (other.value_.pointer_value_ != nullptr && other.length_ > 0) {
+    value_.pointer_value_ = new char[other.length_];
+    memcpy(value_.pointer_value_, other.value_.pointer_value_, other.length_);
+  }
+}
+
+const float *Value::vector_data() const { return reinterpret_cast<const float *>(value_.pointer_value_); }
+
+float *Value::vector_data() { return reinterpret_cast<float *>(value_.pointer_value_); }
+
+int Value::vector_dim() const
+{
+  if (attr_type_ != AttrType::VECTORS) {
+    return 0;
+  }
+  return length_ / static_cast<int>(sizeof(float));
 }
 
 string Value::to_string() const
